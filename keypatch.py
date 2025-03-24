@@ -556,6 +556,17 @@ class Keypatch_Asm:
                 return asm
             return asm[:sp]
 
+        def add_0x_prefix(match):
+            hex_value = match.group(0)
+            if not hex_value.lower().startswith('0x'):
+                hex_value_no_h = hex_value.rstrip('h') # remove trailing 'h' if present for conversion check
+                try:
+                    int(hex_value_no_h, 16) # check if it's a valid hex number after removing 'h'
+                    return '0x' + hex_value.rstrip('h') # add '0x' and remove trailing 'h' for replacement
+                except ValueError:
+                    return hex_value # not a valid hex number after removing 'h', return original
+            return hex_value # already has '0x' prefix, return original
+
         if self.check_address(address) != 1:
             # not a valid address
             return ''
@@ -580,6 +591,12 @@ class Keypatch_Asm:
         while get_operand_type(address, i) > 0 and i < 6:
             t = get_operand_type(address, i)
             o = print_operand(address, i)
+
+            # Regular expression to match hexadecimal numbers in operands, including standalone and those in expressions, and add "0x" prefix
+            # Modified regular expression: matches hex numbers surrounded by word boundaries (\b), can include 'h' suffix
+            hex_pattern_operand = re.compile(r'\b[0-9a-fA-F]+h?\b')
+            o = re.sub(hex_pattern_operand, add_0x_prefix, o)
+
 
             if t in (idc.o_mem, idc.o_displ):
                 parts = list(o.partition(':'))
