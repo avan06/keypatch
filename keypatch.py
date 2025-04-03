@@ -108,12 +108,13 @@ else:
 
 # bleeding-edge version
 # on a new release, this should be sync with VERSION_STABLE file
-VERSION = "2.2"
+VERSION = "2.2 Revised 2025"
 
 
-MAX_INSTRUCTION_STRLEN = 256
-MAX_ENCODING_LEN = 40
-MAX_ADDRESS_LEN = 40
+MAX_INSTRUCTION_STRLEN = 512
+MAX_ENCODING_LEN = 60
+MAX_ADDRESS_LEN = 60
+MAX_INPUT_LEN = 60
 ENCODING_ERR_OUTPUT = "..."
 KP_GITHUB_VERSION = "https://raw.githubusercontent.com/keystone-engine/keypatch/master/VERSION_STABLE"
 KP_HOMEPAGE = "http://keystone-engine.org/keypatch"
@@ -546,6 +547,46 @@ class Keypatch_Asm:
 
         return codes
 
+    instructions_list = [
+      'lea', 'mov', 'push', 'pop', 'call', 'ret', 'jne', 'je', 'jmp', 'sub', 'add', 'inc', 'dec', 'xor', 'and', 'or', 'test', 'cmp', 'shl', 'shr',
+      'sar', 'rol', 'ror', 'rcl', 'rcr', 'not', 'neg', 'div', 'mul', 'idiv', 'imul', 'fld', 'fst', 'fadd', 'fsub', 'fmul', 'fdiv', 'fsqrt', 'fsin',
+      'fcos', 'fabs', 'fchs', 'ftst', 'fxch', 'fcom', 'fcomp', 'fcompp', 'fild', 'fist', 'fistp', 'fbld', 'fbstp', 'frndint', 'fscale', 'fprem',
+      'fptan', 'fpatan', 'f2xm1', 'fyl2x', 'fyl2xp1', 'fsincos', 'fxtract', 'fdisp', 'feni', 'fdisi', 'fclex', 'fcwd', 'fldcw', 'fninit', 'fstcw',
+      'fstdw', 'fstenv', 'fnsave', 'frstor', 'fsave', 'fsenv', 'fsetpm', 'fwait', 'fnstsw', 'sahf', 'lahf', 'pushf', 'popf', 'pushfd', 'popfd',
+      'iret', 'iretd', 'int', 'into', 'bound', 'hlt', 'nop', 'ud2', 'xlat', 'xlatb', 'cmpsb', 'cmpsw', 'cmpsd', 'stosb', 'stosw', 'stosd', 'lodsb',
+      'lodsw', 'lodsd', 'scasb', 'scasw', 'scasd', 'insb', 'insw', 'insd', 'outsb', 'outsw', 'outsd', 'loop', 'loopne', 'loopnz', 'loope', 'loopz',
+      'jecxz', 'jcxz', 'rep', 'repe', 'repz', 'repne', 'repnz', 'lock', 'xchg', 'cmpxchg', 'cmpxchg8b', 'bswap', 'xadd', 'cpuid', 'bt', 'bts', 'btr',
+      'btc', 'bsf', 'bsr', 'seto', 'setno', 'setb', 'setc', 'setnae', 'setnc', 'setnb', 'setae', 'sete', 'setz', 'setne', 'setnz', 'setbe', 'setna',
+      'setnbe', 'seta', 'sets', 'setns', 'setp', 'setpe', 'setnp', 'setpo', 'setl', 'setnge', 'setnl', 'setge', 'setle', 'setng', 'setnle', 'setg'
+    ] # List of common x86 assembly instructions
+    instructions_set = set(instructions_list) # Convert list to set for faster lookup
+
+    def fix_by_add_semicolons(self, asm):
+      instructions = r'(' + '|'.join(self.instructions_list) + r')\b' # Dynamically create regex pattern from instruction list
+      regex = rf'(?<!;)(?<!^)(\s+)(?={instructions})' # Regex to find whitespace before instructions (not at the start of line)
+      return re.sub(regex, r'; ', asm.strip())  # Replace the whitespace with semicolon and a space
+
+    # Regular expression to match hexadecimal numbers in operands, including standalone values and those in expressions.  
+    # Automatically adds the "0x" prefix unless the number is an instruction or already prefixed.  
+    # Supports numbers with an optional 'h' suffix and ensures valid hexadecimal conversion before modification. 
+    def fix_by_add_0x_prefix(self, asm):
+      hex_pattern_operand = re.compile(r'(?<=[\s,\[\+\-])\b[0-9a-fA-F]+h?\b')
+      return re.sub(hex_pattern_operand, self.add_0x_prefix, asm.strip())
+
+    def add_0x_prefix(self, match):
+        hex_value = match.group(0)
+        hex_value_no_h = hex_value.rstrip('h').lower() # Remove trailing 'h' and convert to lowercase for comparison
+        if hex_value_no_h in self.instructions_set: # Check if the value is in the instruction set
+            return hex_value # If it's an instruction, return original value
+
+        if not hex_value.lower().startswith('0x'): # Check if '0x' prefix is already present
+            try:
+                int(hex_value_no_h, 16) # Try to convert to integer to validate it's a hex number
+                return '0x' + hex_value.rstrip('h') # Add '0x' and remove trailing 'h' for replacement
+            except ValueError:
+                return hex_value # If not a valid hex number, return original value
+        return hex_value # If already has '0x' prefix, return original value
+
     # get disasm from IDA
     # return '' on invalid address
     def ida_get_disasm(self, address, fixup=False):
@@ -555,17 +596,6 @@ class Keypatch_Asm:
             if sp == -1:
                 return asm
             return asm[:sp]
-
-        def add_0x_prefix(match):
-            hex_value = match.group(0)
-            if not hex_value.lower().startswith('0x'):
-                hex_value_no_h = hex_value.rstrip('h') # remove trailing 'h' if present for conversion check
-                try:
-                    int(hex_value_no_h, 16) # check if it's a valid hex number after removing 'h'
-                    return '0x' + hex_value.rstrip('h') # add '0x' and remove trailing 'h' for replacement
-                except ValueError:
-                    return hex_value # not a valid hex number after removing 'h', return original
-            return hex_value # already has '0x' prefix, return original
 
         if self.check_address(address) != 1:
             # not a valid address
@@ -591,12 +621,7 @@ class Keypatch_Asm:
         while get_operand_type(address, i) > 0 and i < 6:
             t = get_operand_type(address, i)
             o = print_operand(address, i)
-
-            # Regular expression to match hexadecimal numbers in operands, including standalone and those in expressions, and add "0x" prefix
-            # Modified regular expression: matches hex numbers surrounded by word boundaries (\b), can include 'h' suffix
-            hex_pattern_operand = re.compile(r'\b[0-9a-fA-F]+h?\b')
-            o = re.sub(hex_pattern_operand, add_0x_prefix, o)
-
+            o = self.fix_by_add_0x_prefix(o)
 
             if t in (idc.o_mem, idc.o_displ):
                 parts = list(o.partition(':'))
@@ -1066,7 +1091,7 @@ class Keypatch_Asm:
 # Common ancestor form to be derived by Patcher, FillRange & Search
 class Keypatch_Form(idaapi.Form):
     # prepare for form initializing
-    def setup(self, kp_asm, address, assembly=None):
+    def setup(self, kp_asm: Keypatch_Asm, address, assembly=None):
         self.kp_asm = kp_asm
         self.address = address
 
@@ -1213,7 +1238,7 @@ class Keypatch_Form(idaapi.Form):
 
 # Fill Range form
 class Keypatch_FillRange(Keypatch_Form):
-    def __init__(self, kp_asm, addr_begin, addr_end, assembly=None, opts=None):
+    def __init__(self, kp_asm: Keypatch_Asm, addr_begin, addr_end, assembly=None, opts=None):
         self.setup(kp_asm, addr_begin, assembly)
         self.addr_end = addr_end
 
@@ -1242,10 +1267,10 @@ KEYPATCH:: Fill Range
                           selval = self.endian_id),
             'c_addr': self.NumericInput(value=addr_begin, swidth=MAX_ADDRESS_LEN, tp=self.FT_ADDR),
             'c_addr_end': self.NumericInput(value=addr_end - 1, swidth=MAX_ADDRESS_LEN, tp=self.FT_ADDR),
-            'c_assembly': self.StringInput(value=self.asm[:MAX_INSTRUCTION_STRLEN], width=MAX_INSTRUCTION_STRLEN),
+            'c_assembly': self.StringInput(value=self.asm[:MAX_INSTRUCTION_STRLEN], width=MAX_INSTRUCTION_STRLEN, swidth=MAX_INPUT_LEN),
             'c_size': self.NumericInput(value=addr_end - addr_begin, swidth=8, tp=self.FT_DEC),
-            'c_raw_assembly': self.StringInput(value='', width=MAX_INSTRUCTION_STRLEN),
-            'c_encoding': self.StringInput(value='', width=MAX_ENCODING_LEN),
+            'c_raw_assembly': self.StringInput(value='', width=MAX_INSTRUCTION_STRLEN, swidth=MAX_INPUT_LEN),
+            'c_encoding': self.StringInput(value='', width=MAX_ENCODING_LEN, swidth=MAX_INPUT_LEN),
             'c_encoding_len': self.NumericInput(value=0, swidth=8, tp=self.FT_DEC),
             'c_syntax': self.DropdownListControl(
                           items = self.syntax_keys,
@@ -1268,7 +1293,7 @@ KEYPATCH:: Fill Range
 
 # Patcher form
 class Keypatch_Patcher(Keypatch_Form):
-    def __init__(self, kp_asm, address, assembly=None, opts=None):
+    def __init__(self, kp_asm: Keypatch_Asm, address, assembly=None, opts=None):
         self.setup(kp_asm, address, assembly)
 
         # create Patcher form
@@ -1290,18 +1315,19 @@ KEYPATCH:: Patcher
              <##-   Size  :{c_encoding_len}>
             <~N~OPs padding until next instruction boundary:{c_opt_padding}>
             <Save ~o~riginal instructions in IDA comment:{c_opt_comment}>{c_opt_chk}>
+            <##Format Assembly:{fix_asm_btn}>{fix_asm_info}
             """, {
             'c_endian': self.DropdownListControl(
                           items = list(self.kp_asm.endian_lists.keys()),
                           readonly = True,
                           selval = self.endian_id),
             'c_addr': self.NumericInput(value=address, swidth=MAX_ADDRESS_LEN, tp=self.FT_ADDR),
-            'c_assembly': self.StringInput(value=self.asm[:MAX_INSTRUCTION_STRLEN], width=MAX_INSTRUCTION_STRLEN),
-            'c_orig_assembly': self.StringInput(value=self.orig_asm[:MAX_INSTRUCTION_STRLEN], width=MAX_INSTRUCTION_STRLEN),
-            'c_orig_encoding': self.StringInput(value=self.orig_encoding[:MAX_ENCODING_LEN], width=MAX_ENCODING_LEN),
+            'c_assembly': self.StringInput(value=self.asm[:MAX_INSTRUCTION_STRLEN], width=MAX_INSTRUCTION_STRLEN, swidth=MAX_INPUT_LEN),
+            'c_orig_assembly': self.StringInput(value=self.orig_asm[:MAX_INSTRUCTION_STRLEN], width=MAX_INSTRUCTION_STRLEN, swidth=MAX_INPUT_LEN),
+            'c_orig_encoding': self.StringInput(value=self.orig_encoding[:MAX_ENCODING_LEN], width=MAX_ENCODING_LEN, swidth=MAX_INPUT_LEN),
             'c_orig_len': self.NumericInput(value=self.orig_len, swidth=8, tp=self.FT_DEC),
-            'c_raw_assembly': self.StringInput(value='', width=MAX_INSTRUCTION_STRLEN),
-            'c_encoding': self.StringInput(value='', width=MAX_ENCODING_LEN),
+            'c_raw_assembly': self.StringInput(value='', width=MAX_INSTRUCTION_STRLEN, swidth=MAX_INPUT_LEN),
+            'c_encoding': self.StringInput(value='', width=MAX_ENCODING_LEN, swidth=MAX_INPUT_LEN),
             'c_encoding_len': self.NumericInput(value=0, swidth=8, tp=self.FT_DEC),
             'c_syntax': self.DropdownListControl(
                           items = self.syntax_keys,
@@ -1309,6 +1335,8 @@ KEYPATCH:: Patcher
                           selval = self.syntax_id),
             'c_opt_chk':self.ChkGroupControl(('c_opt_padding', 'c_opt_comment', ''), value=opts['c_opt_chk']),
             'FormChangeCb': self.FormChangeCb(self.OnFormChange),
+            'fix_asm_btn': self.ButtonInput(self.OnFixAssembly, swidth=10),
+            'fix_asm_info': self.StringLabel("Prefix hex with '0x' and separate multi-instructions with semicolons"),
             })
 
         self.Compile()
@@ -1321,6 +1349,13 @@ KEYPATCH:: Patcher
         self.EnableField(self.c_orig_len, False)
 
         return self.update_patchform(fid)
+
+    # callback for the Fix Assembly button
+    def OnFixAssembly(self, code=0):
+        assembly = self.GetControlValue(self.c_assembly)
+        assembly = self.kp_asm.fix_by_add_semicolons(assembly)
+        assembly = self.kp_asm.fix_by_add_0x_prefix(assembly)
+        self.SetControlValue(self.c_assembly, assembly)
 
 
 # Search position chooser
@@ -1360,7 +1395,7 @@ class SearchResultChooser(Choose):
 
 # Search form
 class Keypatch_Search(Keypatch_Form):
-    def __init__(self, kp_asm, address, assembly=None):
+    def __init__(self, kp_asm: Keypatch_Asm, address, assembly=None):
         self.setup(kp_asm, address, assembly)
 
         # create Search form
@@ -1380,9 +1415,9 @@ KEYPATCH:: Search
              <##-   Size  :{c_encoding_len}>
             """, {
             'c_addr': self.NumericInput(value=address, swidth=MAX_ADDRESS_LEN, tp=self.FT_ADDR),
-            'c_assembly': self.StringInput(value=self.asm[:MAX_INSTRUCTION_STRLEN], width=MAX_INSTRUCTION_STRLEN),
-            'c_raw_assembly': self.StringInput(value='', width=MAX_INSTRUCTION_STRLEN),
-            'c_encoding': self.StringInput(value='', width=MAX_ENCODING_LEN),
+            'c_assembly': self.StringInput(value=self.asm[:MAX_INSTRUCTION_STRLEN], width=MAX_INSTRUCTION_STRLEN, swidth=MAX_INPUT_LEN),
+            'c_raw_assembly': self.StringInput(value='', width=MAX_INSTRUCTION_STRLEN, swidth=MAX_INPUT_LEN),
+            'c_encoding': self.StringInput(value='', width=MAX_ENCODING_LEN, swidth=MAX_INPUT_LEN),
             'c_encoding_len': self.NumericInput(value=0, swidth=8, tp=self.FT_DEC),
             'c_arch': self.DropdownListControl(
                           items = self.arch_keys,
